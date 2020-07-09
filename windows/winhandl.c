@@ -286,6 +286,8 @@ static DWORD WINAPI handle_output_threadfunc(void *param)
     OVERLAPPED ovl, *povl;
     HANDLE oev;
     bool writeret;
+    DWORD pos;
+    DWORD lenwritten;
 
     if (ctx->flags & HANDLE_FLAG_OVERLAPPED) {
         povl = &ovl;
@@ -306,25 +308,34 @@ static DWORD WINAPI handle_output_threadfunc(void *param)
             SetEvent(ctx->ev_to_main);
             break;
         }
-        if (povl) {
-            memset(povl, 0, sizeof(OVERLAPPED));
-            povl->hEvent = oev;
+
+        lenwritten = 0;
+        for (pos = 0; pos < ctx->len; pos++) {
+          DWORD written;
+          if (povl) {
+              memset(povl, 0, sizeof(OVERLAPPED));
+              povl->hEvent = oev;
+          }
+
+          writeret = WriteFile(ctx->h, ctx->buffer + pos, (DWORD) 1,
+                               &ctx->lenwritten, povl);
+          if (!writeret)
+              ctx->writeerr = GetLastError();
+          else
+              ctx->writeerr = 0;
+          if (povl && !writeret && GetLastError() == ERROR_IO_PENDING) {
+              writeret = GetOverlappedResult(ctx->h, povl,
+                                             &ctx->lenwritten, true);
+              if (!writeret)
+                  ctx->writeerr = GetLastError();
+              else
+                  ctx->writeerr = 0;
+          }
+          lenwritten += written;
+          Sleep(1);
         }
 
-        writeret = WriteFile(ctx->h, ctx->buffer, ctx->len,
-                             &ctx->lenwritten, povl);
-        if (!writeret)
-            ctx->writeerr = GetLastError();
-        else
-            ctx->writeerr = 0;
-        if (povl && !writeret && GetLastError() == ERROR_IO_PENDING) {
-            writeret = GetOverlappedResult(ctx->h, povl,
-                                           &ctx->lenwritten, true);
-            if (!writeret)
-                ctx->writeerr = GetLastError();
-            else
-                ctx->writeerr = 0;
-        }
+        ctx->lenwritten = lenwritten;
 
         SetEvent(ctx->ev_to_main);
         if (!writeret) {
